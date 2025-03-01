@@ -29,14 +29,19 @@ def scrape_listing_details(url):
         details['Metraż'] = soup.find("div", class_="css-1ftqasz").text.strip() if soup.find("div", class_="css-1ftqasz") else "Brak danych"
         
         # Piętro z apostrofem
-        details['Piętro'] = "='Brak danych"
+        # Piętro z apostrofem
+ # Piętro z apostrofem
+# Poprawione scrapowanie piętra
+        details['Piętro'] = "Brak danych"
         info_sections = soup.find_all("div", class_="css-1xw0jqp eows69w1")
         for section in info_sections:
             label = section.find("p", class_="eows69w2 css-1airkmu")
             if label and "Piętro" in label.text:
                 floor_value = label.find_next_sibling("p", class_="eows69w2 css-1airkmu")
                 if floor_value:
-                    details['Piętro'] = f"='{floor_value.text.strip()}"
+                    floor_text = floor_value.text.strip()
+                    # Dodaj apostrof przed wartością i formatuj jako tekst
+                    details['Piętro'] = f"'{floor_text}"  # Gwarantuje format tekstowy w CSV
                 break
 
         # Dodatkowe szczegóły
@@ -72,7 +77,7 @@ def scrape_listing_details(url):
         return {}
 
 def scrape_otodom(start_page, end_page):
-    base_url = "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/cala-polska?page="
+    base_url = "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/mazowieckie/warszawa/warszawa/warszawa?limit=24&ownerTypeSingleSelect=ALL&by=DEFAULT&direction=DESC&viewType=listing&page="
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
     
     properties = []
@@ -140,7 +145,10 @@ def scrape_otodom(start_page, end_page):
             'Rodzaj zabudowy', 'Materiał budynku', 'Okna', 'Media', 'Link'
         ])
         writer.writeheader()
-        writer.writerows(properties)
+        # Dodaj apostrof do wszystkich wartości w kolumnie "Piętro"
+        for prop in properties:
+            prop['Piętro'] = f"'{prop.get('Piętro', 'Brak danych')}"
+            writer.writerow(prop)
 
     print("Dane zapisane do otodom_pelne_dane.csv")
 
