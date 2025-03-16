@@ -92,3 +92,56 @@ if response.status_code == 200:
 
 else:
     print(f"Błąd pobierania strony, kod statusu: {response.status_code}")
+
+# from selenium import webdriver
+# from selenium.webdriver.chrome.service import Service
+# from webdriver_manager.chrome import ChromeDriverManager
+# from selenium.webdriver.common.by import By
+# from selenium.webdriver.support.ui import WebDriverWait
+# from selenium.webdriver.support import expected_conditions as EC
+# from selenium.common.exceptions import TimeoutException
+# from bs4 import BeautifulSoup
+# import time
+
+# # 1. Inicjalizacja przeglądarki (Chrome).
+# options = webdriver.ChromeOptions()
+# # options.add_argument("--headless")  # Odkomentuj, jeśli chcesz tryb headless
+
+# driver = webdriver.Chrome(
+#     service=Service(ChromeDriverManager().install()),
+#     options=options
+# )
+
+# url = "https://www.otodom.pl/pl/oferta/mieszkanie-4-pok-20min-do-centrum-gdanska-ID4tVuh"
+# driver.get(url)
+
+# # 2. Poczekaj, aż pojawi się kontener opisu (aby strona zdążyła się załadować).
+# wait = WebDriverWait(driver, 5)
+# try:
+#     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-cy='adPageAdDescription']")))
+# except TimeoutException:
+#     print("Nie udało się odnaleźć kontenera z opisem w rozsądnym czasie.")
+
+# # 3. Spróbuj kliknąć w przycisk "Pokaż więcej" (może go nie być na tej stronie).
+# try:
+#     show_more_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Pokaż więcej')]")
+#     show_more_btn.click()
+#     time.sleep(2)  # Można zastąpić WebDriverWait, jeśli potrzeba
+# except:
+#     # Brak przycisku lub nie udało się kliknąć - nie szkodzi.
+#     pass
+
+# # 4. Teraz pobieramy finalny HTML i wyciągamy opis.
+# page_source = driver.page_source
+# driver.quit()
+
+# soup = BeautifulSoup(page_source, "html.parser")
+# description_div = soup.find("div", {"data-cy": "adPageAdDescription"})
+
+# if description_div:
+#     description_text = description_div.get_text(separator="\n", strip=True)
+#     print(description_text)
+# else:
+#     print("Opis nie znaleziony.")
+
+
