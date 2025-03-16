@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import csv
 import time
+import concurrent.futures
 
 # Importy Selenium
 from selenium import webdriver
@@ -74,6 +75,7 @@ def extract_detailed_info(link, headers, driver):
         if label and "Piętro" in label.text:
             floor_value = label.find_next_sibling("p", class_="eows69w2 css-1airkmu")
             if floor_value:
+                # Zachowujemy stały znak "='"
                 floor = f"='{floor_value.text.strip()}"
             break
 
@@ -131,26 +133,34 @@ def extract_detailed_info(link, headers, driver):
         "Link": link
     }
 
+def process_listing(link, headers):
+    """
+    Funkcja przetwarza pojedynczy link oferty.
+    Tworzy własny driver, pobiera dane oferty i zamyka driver.
+    """
+    options = webdriver.ChromeOptions()
+    # options.add_argument("--headless")  # odkomentuj, jeśli chcesz pracować w trybie headless
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    
+    details = extract_detailed_info(link, headers, driver)
+    
+    driver.quit()
+    return details
+
 def scrape_otodom(start_page, end_page):
     """
     Przegląda strony wyników oraz zbiera dane ze szczegółowych ofert.
     Łączy metodę requests do pobierania listingu z Selenium do pobierania opisu.
+    Wersja z optymalizacją – równoległe przetwarzanie ofert przy użyciu ThreadPoolExecutor.
     """
     base_url = "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/cala-polska?page="
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
     }
     
-    # Inicjalizacja Selenium
-    options = webdriver.ChromeOptions()
-    # options.add_argument("--headless")  # Odkomentuj, jeśli chcesz pracować w trybie headless
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+    listing_links = []
     
-    all_properties = []
-    
+    # Zbieranie linków do ofert z kolejnych stron wyników
     for page in range(start_page, end_page + 1):
         url = base_url + str(page)
         print(f"Pobieranie strony: {url}")
@@ -163,26 +173,30 @@ def scrape_otodom(start_page, end_page):
         listings = soup.find_all("article", attrs={"data-cy": "listing-item"})
         
         for listing in listings:
-            try:
-                link_tag = listing.find("a", attrs={"data-cy": "listing-item-link"})
-                if link_tag:
-                    link = "https://www.otodom.pl" + link_tag["href"]
-                    details = extract_detailed_info(link, headers, driver)
-                    if details:
-                        # Pobranie liczby pokoi z listingu (jeśli dostępne)
-                        rooms_tag = listing.find("dt", string="Liczba pokoi")
-                        rooms = rooms_tag.find_next_sibling("dd").text.strip() if rooms_tag else "Brak danych"
-                        details["Liczba pokoi"] = rooms
-                        
-                        all_properties.append(details)
-                        print(f"Przetworzono: {link}")
-                    time.sleep(1)  # krótkie opóźnienie, by nie obciążać serwera
-                else:
-                    print("Brak linku w ofercie.")
-            except Exception as e:
-                print(f"Błąd podczas przetwarzania oferty na stronie {page}: {e}")
+            link_tag = listing.find("a", attrs={"data-cy": "listing-item-link"})
+            if link_tag:
+                full_link = "https://www.otodom.pl" + link_tag["href"]
+                # Pobranie liczby pokoi, jeśli dostępna
+                rooms_tag = listing.find("dt", string="Liczba pokoi")
+                rooms = rooms_tag.find_next_sibling("dd").text.strip() if rooms_tag else "Brak danych"
+                listing_links.append((full_link, rooms))
+            else:
+                print("Brak linku w ofercie.")
+        time.sleep(1)
     
-    driver.quit()  # Zamykamy przeglądarkę Selenium po zakończeniu zbierania danych
+    print(f"Znaleziono {len(listing_links)} ofert.")
+    all_properties = []
+    
+    # Równoległe przetwarzanie ofert
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(process_listing, link, headers): (link, rooms) for (link, rooms) in listing_links}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                _, rooms = futures[future]
+                result["Liczba pokoi"] = rooms
+                all_properties.append(result)
+                print(f"Przetworzono: {result['Link']}")
     
     # Zapis do pliku CSV
     csv_file = "otodom_listings_detailed.csv"
