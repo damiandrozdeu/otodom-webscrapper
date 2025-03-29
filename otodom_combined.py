@@ -3,218 +3,217 @@ from bs4 import BeautifulSoup
 import csv
 import time
 import concurrent.futures
+import json
+import random
+from urllib.parse import urljoin
 
-# Importy Selenium
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
 
-def extract_description_selenium(link, driver):
-    """
-    Funkcja używa Selenium do pobrania opisu oferty.
-    """
-    driver.get(link)
-    wait = WebDriverWait(driver, 5)
-    try:
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-cy='adPageAdDescription']")))
-    except TimeoutException:
-        print(f"Nie udało się odnaleźć kontenera z opisem dla: {link}")
-        return "Brak opisu"
-    
-    # Kliknij przycisk "Pokaż więcej", jeśli jest dostępny
-    try:
-        show_more_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Pokaż więcej')]")
-        show_more_btn.click()
-        time.sleep(2)  # krótkie oczekiwanie, by zawartość się rozwinęła
-    except Exception:
-        pass
-    
-    page_source = driver.page_source
-    soup = BeautifulSoup(page_source, "html.parser")
-    description_div = soup.find("div", {"data-cy": "adPageAdDescription"})
-    
-    if description_div:
-        return description_div.get_text(separator="\n", strip=True)
-    else:
-        return "Brak opisu"
+class OtodomScraper:
+    def __init__(self):
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept-Language": "pl-PL,pl;q=0.9",
+        }
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
 
-def extract_detailed_info(link, headers, driver):
-    """
-    Pobiera dane oferty przy użyciu requests/BeautifulSoup dla większości elementów 
-    oraz Selenium dla pobrania pełnego opisu.
-    """
-    response = requests.get(link, headers=headers)
-    if response.status_code != 200:
-        print(f"Błąd pobierania strony oferty: {link}")
-        return None
+    @staticmethod
+    def safe_get(data, keys, default=None):
+        for key in keys:
+            try:
+                data = data.get(key, {})
+            except AttributeError:
+                return default
+        return data if data not in [None, {}] else default
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    
-    # Podstawowe dane
-    title_tag = soup.find("h1")
-    title_text = title_tag.text.strip() if title_tag else "Tytuł nie znaleziony"
+    def get_characteristics_dict(self, ad_data):
+        characteristics = {}
+        for item in self.safe_get(ad_data, ['characteristics'], []):
+            key = item.get('key')
+            if key:
+                characteristics[key] = {
+                    'value': item.get('value'),
+                    'localizedValue': item.get('localizedValue')
+                }
+        return characteristics
 
-    price_tag = soup.find("strong", {"data-cy": "adPageHeaderPrice"})
-    price = price_tag.text.strip() if price_tag else "Cena nieznana"
-
-    location_tag = soup.find("a", class_="css-1jjm9oe")
-    location = location_tag.text.strip() if location_tag else "Lokalizacja nieznana"
-
-    size_tag = soup.find("div", class_="css-1ftqasz")
-    size = size_tag.text.strip() if size_tag else "Metraż nieznany"
-
-    # Pobranie informacji o piętrze
-    floor = "Piętro nieznane"
-    info_sections = soup.find_all("div", class_="css-1xw0jqp eows69w1")
-    for section in info_sections:
-        label = section.find("p", class_="eows69w2 css-1airkmu")
-        if label and "Piętro" in label.text:
-            floor_value = label.find_next_sibling("p", class_="eows69w2 css-1airkmu")
-            if floor_value:
-                # Zachowujemy stały znak "='"
-                floor = f"='{floor_value.text.strip()}"
-            break
-
-    # Pobranie dodatkowych szczegółów
-    details = {}
-    for item in soup.find_all("div", class_="css-1xw0jqp"):
-        label = item.find("p", class_="eows69w2")
-        value_tags = item.find_all("p", class_="eows69w2")
-        if label and value_tags:
-            value = value_tags[-1].text.strip()
-            details[label.text.strip().replace(":", "")] = value
-
-    heating = details.get("Ogrzewanie", "Brak danych")
-    rent = details.get("Czynsz", "Brak danych")
-    finish_state = details.get("Stan wykończenia", "Brak danych")
-    market = details.get("Rynek", "Brak danych")
-    ownership = details.get("Forma własności", "Brak danych")
-    available_from = details.get("Dostępne od", "Brak danych")
-    advertiser_type = details.get("Typ ogłoszeniodawcy", "Brak danych")
-    
-    additional_info_list = [item.text.strip() for item in soup.find_all("span", class_="css-axw7ok")]
-    additional_info = " ".join(additional_info_list) if additional_info_list else "Brak danych"
-    
-    build_year = details.get("Rok budowy", "Brak danych")
-    elevator = details.get("Winda", "Brak danych")
-    building_type = details.get("Rodzaj zabudowy", "Brak danych")
-    building_material = details.get("Materiał budynku", "Brak danych")
-    windows = details.get("Okna", "Brak danych")
-    utilities = details.get("Media", "Brak danych")
-    
-    # Pobranie opisu za pomocą Selenium
-    description = extract_description_selenium(link, driver)
-    
-    return {
-        "Tytuł": title_text,
-        "Cena": price,
-        "Lokalizacja": location,
-        "Metraż": size,
-        "Piętro": floor,
-        "Ogrzewanie": heating,
-        "Czynsz": rent,
-        "Stan wykończenia": finish_state,
-        "Rynek": market,
-        "Forma własności": ownership,
-        "Dostępne od": available_from,
-        "Typ ogłoszeniodawcy": advertiser_type,
-        "Informacje dodatkowe": additional_info,
-        "Rok budowy": build_year,
-        "Winda": elevator,
-        "Rodzaj zabudowy": building_type,
-        "Materiał budynku": building_material,
-        "Okna": windows,
-        "Media": utilities,
-        "Opis": description,
-        "Link": link
-    }
-
-def process_listing(link, headers):
-    """
-    Funkcja przetwarza pojedynczy link oferty.
-    Tworzy własny driver, pobiera dane oferty i zamyka driver.
-    """
-    options = webdriver.ChromeOptions()
-    # options.add_argument("--headless")  # odkomentuj, jeśli chcesz pracować w trybie headless
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    
-    details = extract_detailed_info(link, headers, driver)
-    
-    driver.quit()
-    return details
-
-def scrape_otodom(start_page, end_page):
-    """
-    Przegląda strony wyników oraz zbiera dane ze szczegółowych ofert.
-    Łączy metodę requests do pobierania listingu z Selenium do pobierania opisu.
-    Wersja z optymalizacją – równoległe przetwarzanie ofert przy użyciu ThreadPoolExecutor.
-    """
-    base_url = "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/cala-polska?page="
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-    }
-    
-    listing_links = []
-    
-    # Zbieranie linków do ofert z kolejnych stron wyników
-    for page in range(start_page, end_page + 1):
-        url = base_url + str(page)
-        print(f"Pobieranie strony: {url}")
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            print(f"Błąd pobierania strony {page}")
-            continue
+    def extract_property_data(self, ad_data, link):
+        characteristics = self.get_characteristics_dict(ad_data)
         
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("article", attrs={"data-cy": "listing-item"})
+        # Lokalizacja
+        location = self.safe_get(ad_data, ['location'], {})
+        address = self.safe_get(location, ['address'], {})
+        coordinates = self.safe_get(location, ['coordinates'], {})
+
+        # Zdjęcia
+        images = self.safe_get(ad_data, ['images'], [])
+        photo_urls = [img.get('large', '') for img in images if img.get('large')]
+
+        # Piętro
+        floor = " / ".join(filter(None, [
+            self.safe_get(characteristics, ['floor_no', 'localizedValue']),
+            self.safe_get(characteristics, ['building_floors_num', 'localizedValue'])
+        ]))
+        floor = f"P: {floor}" if floor else "Brak danych"
+
+        property_data = {
+            "Tytuł": self.safe_get(ad_data, ['title'], "Brak tytułu"),
+            "Cena (PLN)": self.safe_get(characteristics, ['price', 'value'], 0),
+            "Cena za m² (PLN)": self.safe_get(characteristics, ['price_per_m', 'value'], 0),
+            "Lokalizacja": ", ".join(filter(None, [
+                self.safe_get(address, ['street', 'name']),
+                self.safe_get(address, ['district', 'name']),
+                self.safe_get(address, ['city', 'name'])
+            ])),
+            "Szerokość geo": self.safe_get(coordinates, ['latitude'], "Brak danych"),
+            "Długość geo": self.safe_get(coordinates, ['longitude'], "Brak danych"),
+            "Metraż (m²)": self.safe_get(characteristics, ['m', 'value'], 0),
+            "Piętro": floor,
+            "Liczba pokoi": self.safe_get(characteristics, ['rooms_num', 'value'], 0),
+            "Rynek": self.safe_get(characteristics, ['market', 'localizedValue'], "Brak danych"),
+            "Stan wykończenia": self.safe_get(characteristics, ['construction_status', 'localizedValue'], "Brak danych"),
+            "Rok budowy": self.safe_get(characteristics, ['build_year', 'value'], "Brak danych"),
+            "Materiał budynku": self.safe_get(characteristics, ['building_material', 'localizedValue'], "Brak danych"),
+            "Okna": self.safe_get(characteristics, ['windows_type', 'localizedValue'], "Brak danych"),
+            "Ogrzewanie": self.safe_get(characteristics, ['heating', 'localizedValue'], "Brak danych"),
+            "Winda": "Tak" if 'winda' in self.safe_get(ad_data, ['features'], []) else "Nie",
+            "Czynsz (PLN)": self.safe_get(characteristics, ['rent', 'value'], 0),
+            "Typ ogłoszeniodawcy": self.safe_get(characteristics, ['advertiser_type', 'localizedValue'], "Brak danych"),
+            "Certyfikat energetyczny": self.safe_get(characteristics, ['energy_certificate', 'localizedValue'], "Brak danych"),
+            "Liczba zdjęć": len(images),
+            "Zdjęcia": " | ".join(photo_urls) if photo_urls else "Brak zdjęć",
+            "Data utworzenia": self.safe_get(ad_data, ['createdAt'], "").split("T")[0],
+            "Data modyfikacji": self.safe_get(ad_data, ['modifiedAt'], "").split("T")[0],
+            "Opis": self.safe_get(ad_data, ['description'], "Brak opisu").replace("\n", " ").strip(),
+            "Link": link,
+            "Dodatkowe informacje": " | ".join(self.safe_get(ad_data, ['features'], []))
+        }
+
+        # Konwersja pól numerycznych
+        numeric_fields = ['Cena (PLN)', 'Cena za m² (PLN)', 'Metraż (m²)', 'Liczba pokoi', 'Czynsz (PLN)']
+        for field in numeric_fields:
+            try:
+                property_data[field] = float(property_data[field])
+            except:
+                property_data[field] = 0.0
+
+        return property_data
+
+    def process_property(self, link):
+        try:
+            response = self.session.get(link, timeout=10)
+            response.raise_for_status()
+        except Exception as e:
+            print(f"Błąd pobierania: {link} - {str(e)[:100]}")
+            return None
+
+        try:
+            soup = BeautifulSoup(response.text, "html.parser")
+            script_tag = soup.find('script', id='__NEXT_DATA__')
+            if not script_tag:
+                return None
+
+            data = json.loads(script_tag.string)
+            ad_data = self.safe_get(data, ['props', 'pageProps', 'ad'], {})
+            return self.extract_property_data(ad_data, link) if ad_data else None
+
+        except Exception as e:
+            print(f"Błąd przetwarzania: {link} - {str(e)[:100]}")
+            return None
+
+    def get_property_links(self, page):
+        url = f"https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/cala-polska?page={page}"
+        try:
+            response = self.session.get(url, timeout=15)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            
+            links = []
+            for listing in soup.find_all("article", {"data-cy": "listing-item"}):
+                link_tag = listing.find("a", {"data-cy": "listing-item-link"})
+                if link_tag and link_tag.get("href"):
+                    full_link = urljoin("https://www.otodom.pl", link_tag["href"])
+                    links.append(full_link)
+            
+            time.sleep(random.uniform(0.7, 1.5))
+            return links
+
+        except Exception as e:
+            print(f"Błąd strony {page}: {str(e)[:100]}")
+            return []
+
+    def scrape(self, start_page=1, end_page=1, max_workers=4, page_workers=5):
+        all_links = []
+        print("\n[ETAP 1] Zbieranie linków do ofert...")
         
-        for listing in listings:
-            link_tag = listing.find("a", attrs={"data-cy": "listing-item-link"})
-            if link_tag:
-                full_link = "https://www.otodom.pl" + link_tag["href"]
-                # Pobranie liczby pokoi, jeśli dostępna
-                rooms_tag = listing.find("dt", string="Liczba pokoi")
-                rooms = rooms_tag.find_next_sibling("dd").text.strip() if rooms_tag else "Brak danych"
-                listing_links.append((full_link, rooms))
-            else:
-                print("Brak linku w ofercie.")
-        time.sleep(1)
-    
-    print(f"Znaleziono {len(listing_links)} ofert.")
-    all_properties = []
-    
-    # Równoległe przetwarzanie ofert
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        futures = {executor.submit(process_listing, link, headers): (link, rooms) for (link, rooms) in listing_links}
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                _, rooms = futures[future]
-                result["Liczba pokoi"] = rooms
-                all_properties.append(result)
-                print(f"Przetworzono: {result['Link']}")
-    
-    # Zapis do pliku CSV
-    csv_file = "otodom_listings_detailed.csv"
-    with open(csv_file, "w", newline="", encoding="utf-8-sig") as file:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=page_workers) as executor:
+            future_to_page = {
+                executor.submit(self.get_property_links, page): page 
+                for page in range(start_page, end_page + 1)
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_page):
+                page = future_to_page[future]
+                try:
+                    links = future.result()
+                    all_links.extend(links)
+                    print(f" Strona {page}/{end_page} - zebrano {len(links)} linków", end="\r")
+                except Exception as e:
+                    print(f"Błąd strony {page}: {str(e)[:100]}")
+
+        print(f"\nZnaleziono {len(all_links)} ofert")
+
+        print("\n[ETAP 2] Pobieranie szczegółów...")
+        properties = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self.process_property, link): link for link in all_links}
+            for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                result = future.result()
+                if result:
+                    properties.append(result)
+                print(f" Postęp: {i}/{len(all_links)} ({len(properties)} udanych)", end="\r")
+
+        self.save_to_csv(properties)
+        return properties
+
+    def save_to_csv(self, data):
+        if not data:
+            print("\nBrak danych do zapisania")
+            return
+
+        filename = f"otodom_mieszkania_{time.strftime('%Y%m%d-%H%M')}.csv"
         fieldnames = [
-            "Tytuł", "Cena", "Lokalizacja", "Metraż", "Piętro", "Ogrzewanie", "Czynsz",
-            "Stan wykończenia", "Rynek", "Forma własności", "Dostępne od", "Typ ogłoszeniodawcy",
-            "Informacje dodatkowe", "Rok budowy", "Winda", "Rodzaj zabudowy", "Materiał budynku",
-            "Okna", "Media", "Opis", "Liczba pokoi", "Link"
+            'Tytuł', 'Cena (PLN)', 'Cena za m² (PLN)', 'Lokalizacja',
+            'Szerokość geo', 'Długość geo', 'Metraż (m²)', 'Piętro',
+            'Liczba pokoi', 'Rynek', 'Stan wykończenia', 'Rok budowy',
+            'Materiał budynku', 'Okna', 'Ogrzewanie', 'Winda', 'Czynsz (PLN)',
+            'Typ ogłoszeniodawcy', 'Certyfikat energetyczny', 'Liczba zdjęć',
+            'Zdjęcia', 'Data utworzenia', 'Data modyfikacji', 'Opis', 'Link',
+            'Dodatkowe informacje'
         ]
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        for prop in all_properties:
-            writer.writerow(prop)
-    
-    print(f"Dane zapisane do {csv_file}")
+
+        with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(data)
+
+        print(f"\nDane zapisano do: {filename}")
+        print(f"Liczba zebranych ofert: {len(data)}")
+
 
 if __name__ == "__main__":
-    start_page = int(input("Podaj numer początkowej strony: "))
-    end_page = int(input("Podaj numer końcowej strony: "))
-    scrape_otodom(start_page, end_page)
+    scraper = OtodomScraper()
+    
+    # Konfiguracja
+    START_PAGE = 1
+    END_PAGE = 5110  # Przetestuj z mniejszą liczbą stron przed pełnym scrapowaniem
+    PAGE_WORKERS = 5  # Wątki do zbierania linków
+    DETAIL_WORKERS = 3  # Wątki do szczegółów
+    
+    print(f"Rozpoczynanie scrapowania (strony {START_PAGE}-{END_PAGE})...")
+    scraper.scrape(
+        start_page=START_PAGE,
+        end_page=END_PAGE,
+        page_workers=PAGE_WORKERS,
+        max_workers=DETAIL_WORKERS
+    )
